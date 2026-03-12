@@ -1,0 +1,66 @@
+name: Build & Deploy to K3s
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: taskapi
+  K3S_HOST: ${{ secrets.K3S_HOST }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t $IMAGE_NAME:${{ github.sha }} -t $IMAGE_NAME:latest .
+
+      - name: Save Docker image
+        run: |
+          docker save $IMAGE_NAME:${{ github.sha }} | gzip > image.tar.gz
+
+      - name: Copy image to K3s node
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.K3S_HOST }}
+          username: ${{ secrets.K3S_USER }}
+          key: ${{ secrets.K3S_SSH_KEY }}
+          source: "image.tar.gz"
+          target: "/tmp"
+
+      - name: Deploy to K3s
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.K3S_HOST }}
+          username: ${{ secrets.K3S_USER }}
+          key: ${{ secrets.K3S_SSH_KEY }}
+          script: |
+            # Import image
+            gunzip -c /tmp/image.tar.gz | sudo k3s ctr images import -
+            rm /tmp/image.tar.gz
+
+            # Update deployment with new image tag
+            sudo kubectl set image deployment/taskapi \
+              taskapi=docker.io/library/taskapi:${{ github.sha }} \
+              -n app
+
+            # Wait for rollout
+            sudo kubectl rollout status deployment/taskapi -n app --timeout=60s
+
+            echo "Deploy complete: taskapi:${{ github.sha }}"
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.K3S_HOST }}
+          username: ${{ secrets.K3S_USER }}
+          key: ${{ secrets.K3S_SSH_KEY }}
+          script: |
+            sudo kubectl get pods -n app -l app=taskapi
+            echo "---"
+            curl -sf http://localhost:30081/health || echo "Health check failed"
