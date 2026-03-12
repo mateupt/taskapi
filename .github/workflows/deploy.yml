@@ -9,25 +9,7 @@ env:
   IMAGE_NAME: taskapi
 
 jobs:
-  test:
-    runs-on: self-hosted
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r app/requirements.txt httpx pytest
-
-      - name: Run health check on current deployment
-        run: curl -sf http://localhost:30081/health || echo "No previous deployment"
-
   build-and-deploy:
-    needs: test
     runs-on: self-hosted
     steps:
       - name: Checkout code
@@ -50,13 +32,17 @@ jobs:
 
       - name: Verify deployment
         run: |
+          echo "=== Pods ==="
           sudo kubectl get pods -n app -l app=taskapi
-          echo "---"
+          echo ""
+          echo "=== Health Check ==="
           sleep 5
           curl -sf http://localhost:30081/health
+          echo ""
           echo ""
           echo "Deploy complete: $IMAGE_NAME:${{ github.sha }}"
 
       - name: Cleanup old images
+        if: always()
         run: |
-          sudo docker image prune -f
+          sudo docker image prune -f || true
